@@ -1,0 +1,18 @@
+.gitignore
+Changes
+ex/sample.pl
+lib/AnyEvent/Tarantool.pm
+lib/AnyEvent/Tarantool/Queue.pm
+LICENSE
+Makefile.PL
+MANIFEST			This list of files
+MANIFEST.SKIP
+META.json
+MYMETA.json
+MYMETA.yml
+README
+t/00-load.t
+t/01-test.t
+t/pod-coverage.t
+t/pod.t
+xt/99-dist.xt

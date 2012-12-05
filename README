@@ -1,0 +1,134 @@
+NAME
+    AnyEvent::Tarantool - ...
+
+SYNOPSIS
+        package Sample;
+        use AnyEvent::Tarantool;
+
+        ...
+
+DESCRIPTION
+        ...
+
+METHODS
+    select( $space, $keys, [ $opts = { index = 0, limit = 2**32, offset = 0
+    }, ] $cb->( $result, $error ) )
+
+        $space may be either id or alias, or object
+        $keys may be either nonref value (for ex: 123), or Array of Arrays.
+        AoA is canonical value and always preferred to avoid ambiguity
+            $c->select( 0, 1, $cb )
+              # is equivalent to $c->select( 0, [[1]], $cb )
+
+            $c->select( 0, [[1]], $cb )
+              # select one tuple from space 0 with index0 key value 1
+
+            $c->select( 3, [[1,2],[3,4]], $cb )
+              # select 2 tuples from space 3 with index0 key values [1,2] for the first and [3,4] for the second 
+
+            $c->select( 2, [[1,2,3]], { index => 2, limit => 10, offset => 1  }, $cb )
+              # select tuples from space 2 with index2 key values [1,2,3], at most 10 records, skip first record
+        i
+        =back
+
+        delete( $space, $key, [ $opts = { ret = 0, }, ] $cb->( $result,
+        $error ) )
+
+        $space may be either id or alias, or object
+        $key may be either nonref value (for ex: 123), or Array. Array
+        is canonical value and always preferred to avoid ambiguity
+            $c->delete( 0, 1, $cb )
+              # is equivalent to $c->delete( 0, [1], $cb )
+
+            $c->delete( 0, [1], $cb )
+              # delete one tuple from space 0 with index0 key value 1
+
+            $c->delete( 3, [1,2], $cb )
+              # delete 1 tuple from space 3 with index0 key value [1,2]
+
+            my $tuple = $c->delete( 2, [1,2,3], { ret => 1 }, $cb )
+              # delete tuple from space 2 with index0 key value [1,2,3], and return deleted record
+
+        update( $space, $key, [ $update, $update, ... ] [ $opts = { ret = 0,
+        }, ] $cb->( $result, $error ) )
+
+        $space may be either id or alias, or object
+        $key may be either nonref value (for ex: 123), or Array. Array
+        is canonical value and always preferred to avoid ambiguity
+        $update is an arrayref, one of:
+
+             '=' "[set]( $new_value )" Set field to new value
+             ':' "[splice] ( $offset, $length [, $new_value ] )" Start
+            at offset, cut length bytes, and add a new value
+             '!' "[insert] ( $new_value )" insert a field (before the
+            one specified).
+             '#' "[delete] ()" delete a field
+             '+' "[add] ( $int_value )" Add int_value to field. Field
+            and value must be INT32 or INT64
+             '&' "[and] ( $int_value )" Binary and int_value with field.
+            Field and value must be INT32 or INT64
+             '|' "[or] ( $int_value )" Binary or int_value with field.
+            Field and value must be INT32 or INT64
+             '^' "[xor] ( $int_value )" Binary xor int_value with field.
+            Field and value must be INT32 or INT64
+
+            # For update operations space fields must be configured
+
+            $c->update( 0, 1, [...] $cb )
+              # is equivalent to $c->update( 0, [1], [...], $cb )
+
+            $c->update( 0, [1], [ [ fieldX => '=', 123  ] ], $cb )
+              # update tuple from space 0 with index0 key value 1, set field, configured as fieldX, to value 123
+
+            $c->update( 0, [1], [ [ fieldX => ':', 1,1, "test"  ] ], $cb )
+              # update tuple, splice fieldX from offset 1, length 1 ,and add "test";
+
+        insert( $space, $tuple, [ $opts = { add = 0, replace = 0, return = 0
+        }, ] $cb->( $result, $error ) )
+
+        $space may be either id or alias, or object
+        $tuple must be array
+            $c->insert( 0, [1,2,"test"], $cb )
+              # insert tuple into space 0
+
+            $c->insert( 3, [1,2], { add => 1, return => 1 } $cb )
+              # insert tuple into space 3 only if it not exists. return tuple back
+
+        lua( $function, $args_tuple, [ $opts = { in, out }, ] $cb->(
+        $result, $error ) )
+
+        $function is a name of lua function, defined in Tarantool
+        instance
+        $args_tuple must be array
+        "$opts.in" Format string for arguments.
+        "$opts.out" Format string for return value.
+
+            p Binary string (string w/o utf8 flag). Default format.
+            Could be unpacked manually with "unpack"
+            u Unicode (utf-8) string.
+            L (l) Unsigned (signed) 64-bit integer. Works only if perl
+            was built with int64 support
+            I (i) Unsigned (signed) 32-bit integer.
+            S (s) Unsigned (signed) 16-bit integer.
+            C (c) Unsigned (signed) 8-bit integer.
+
+            $c->lua( 'os.time', [], { out => 'I' } $cb )
+              # call lua os.time(). Return value unpacked as 32bit unsigned integer
+
+AUTHOR
+    Mons Anderson, "<mons@cpan.org>"
+
+COPYRIGHT & LICENSE
+    Copyright 2012 Mons Anderson, all rights reserved.
+
+    This program is free software; you can redistribute it and/or modify it
+    under the terms of either: the GNU General Public License as published
+    by the Free Software Foundation; or the Artistic License.
+
+POD ERRORS
+    Hey! The above document had some coding errors, which are explained
+    below:
+
+    Around line 816:
+        You forgot a '=back' before '=head1'
+
