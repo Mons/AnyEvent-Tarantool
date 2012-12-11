@@ -60,7 +60,7 @@ AnyEvent::Tarantool - ...
 
 =cut
 
-our $VERSION = '0.02'; $VERSION = eval($VERSION);
+our $VERSION = '0.03'; $VERSION = eval($VERSION);
 
 =head1 SYNOPSIS
 
