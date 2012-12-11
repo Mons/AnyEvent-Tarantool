@@ -470,7 +470,7 @@ sub write {
 	}
 	#warn "Sending ".xd $$buf;
 	my $w = syswrite( $self->{fh}, $$buf );
-	if ($w == length $buf) {
+	if ($w == length $$buf) {
 		# ok;
 	}
 	elsif (defined $w) {
