@@ -8,7 +8,7 @@ WriteMakefile(
 	VERSION_FROM      => 'lib/AnyEvent/Tarantool.pm',
 	PREREQ_PM         => {
 		'AnyEvent' => 5,
-		'Protocol-Tarantool' => '0.03',
+		'Protocol-Tarantool' => '0.04',
 	},
 	ABSTRACT_FROM  => 'lib/AnyEvent/Tarantool.pm', # retrieve abstract from module
 	AUTHOR         => 'Mons Anderson <mons@cpan.org>',

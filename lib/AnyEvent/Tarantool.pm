@@ -60,7 +60,7 @@ AnyEvent::Tarantool - ...
 
 =cut
 
-our $VERSION = '0.03'; $VERSION = eval($VERSION);
+our $VERSION = '0.04'; $VERSION = eval($VERSION);
 
 =head1 SYNOPSIS
 
@@ -438,7 +438,28 @@ sub packet {
 	if ( exists $self->{req}{ $id } ) {
 		my ($cb, $space, $format, $args) = @{ delete $self->{req}{ $id } };
 		#warn "response: $pk, $format, $space (cb=$cb)";
-		my $pkt = eval{ Protocol::Tarantool::response( $pk, $format ? ($format->[0],$format->[1]) : $space ? ( $space->{unpack}, $space->{default_unpack}[0] ) : () ) };
+		my $pkt = eval{
+			local $SIG{__WARN__} = sub {
+				local $_ = shift;
+				s{(?<=\S)\s+at .+? \d+\.\s+$}{}s;
+				local $@;
+				eval {
+					#if (m{Field i should be of size}) {
+						if ($format) {
+							warn "[AE::TNT] [$_] format [@$format] {".join(' ',unpack '(H2)*', substr($$pk,0,12))."}...\n";
+						}
+						elsif($space) {
+							warn "[AE::TNT] [$_] space:$space->{id} format [$space->{unpack}, $space->{default_unpack}[0]] {".join(' ',unpack '(H2)*', substr($$pk,0,12))."}...\n";
+						}
+						else {
+							warn "[AE::TNT] [$_] no format {".join(' ',unpack '(H2)*', substr($$pk,0,12))."}...\n";
+						}
+					#}
+				};
+				warn if $@;
+			};
+			Protocol::Tarantool::response( $pk, $format ? ($format->[0],$format->[1]) : $space ? ( $space->{unpack}, $space->{default_unpack}[0] ) : () )
+		};
 		$self->_handle_packet( $pkt, $args );
 		if ($pkt) {
 			if ($pkt->{code} == 0) {
