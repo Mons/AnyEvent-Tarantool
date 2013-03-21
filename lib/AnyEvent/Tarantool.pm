@@ -60,7 +60,7 @@ AnyEvent::Tarantool - ...
 
 =cut
 
-our $VERSION = '0.04'; $VERSION = eval($VERSION);
+our $VERSION = '0.05'; $VERSION = eval($VERSION);
 
 =head1 SYNOPSIS
 
@@ -88,7 +88,7 @@ our $VERSION = '0.04'; $VERSION = eval($VERSION);
 sub init {
 	my $self = shift;
 	$self->{debug} ||= 0;
-	$self->{timeout} ||= 30;
+	$self->{timeout} ||= 5;
 	$self->{reconnect} = 0.1 unless exists $self->{reconnect};
 	
 	$self->{spaces} = Protocol::Tarantool::Spaces->new( delete $self->{spaces} );
@@ -108,6 +108,7 @@ sub new {
 		host      => '0.0.0.0',
 		port      => '33013',
 		read_size =>  4096,
+		max_read_size => MAX_READ_SIZE,
 		@_,
 		req     => {},
 		state   => INITIAL,
@@ -185,8 +186,8 @@ sub connect {
 	$self->{_}{con} = AnyEvent::Socket::tcp_connect
 		$addr,$self->{port},
 		sub {
-			$self or return;pop;
-			#warn "Connect: @_...\n" if $self->{debug};
+			$self or return; pop;
+			#warn "Connect: @_...\n";# if $self->{debug};
 			
 			my ($fh,$host,$port) = @_;
 			
@@ -206,21 +207,37 @@ sub _on_connect {
 	unless ($fh) {
 		#warn "Connect failed: $!";
 		if ($self->{reconnect}) {
-			$self->{connfail} && $self->{connfail}->( "$!" );
+			$self->{connfail} && $self->{connfail}->( $self, "$!" );
 		} else {
-			$self->{disconnected} && $self->{disconnected}->( "$!" );
+			$self->{disconnected} && $self->{disconnected}->( $self, "$!" );
 		}
 		$self->_reconnect_after;
 		return;
 	}
-	$self->state( CONNECTED );
 	$self->{fh} = $fh;
 	if ($self->_on_connect_success( $fh,$host,$port )) {
-		
+		$self->state( CONNECTED );
 	} else {
-		$self->{connected} && $self->{connected}->( $self, $host,$port );
+		my $tm;$tm = AE::timer $self->{timeout},0,sub {
+			undef $tm;
+			local $! = Errno::ETIMEDOUT;
+			local $self->{conncheck} = 1;
+			$self->_on_connreset("$!");
+		};
+		$self->ping(sub { $tm or return;
+			my $res = shift;undef $tm;
+			if ($res and $res->{code} == 0) {
+				$self->state( CONNECTED );
+				$self->{connected} && $self->{connected}->( $self, $host,$port );
+			}
+			else {
+				return if $self->{conncheck};
+				$self->_on_connreset(@_);
+			}
+			
+		});
 	}
-		
+	
 	weaken(my $c = $self);
 	$self->{rw} = AE::io $fh,0,sub {
 		my $buf = $self->{rbuf};
@@ -268,16 +285,22 @@ sub _on_connect {
 
 sub _on_connreset {
 	my ($self,$error) = @_;
-	warn "Connection reset: $error";
-	use Data::Dumper;
-	warn Dumper $self->{req};
-	while (my ($seq,$hdl) = each %{ $self->{req} } ) {
-		my ($reqt, $cb, $unp, $cls) = @$hdl;
-		$cb->(undef, $error);
-	}
+	warn "Connection reset ($self->{server}): $error. Have ".(0+keys %{ $self->{req} })." requests waiting";
+	#use Data::Dumper;
+	#warn Dumper $self->{req};
+	#local $self->{actioqueue} = [];
+	my %req = %{$self->{req}};
 	%{$self->{req}} = ();
 	$self->disconnect($error);
 	$self->_reconnect_after;
+	while (my ($seq,$hdl) = each %req ) {
+		#warn "call handler $seq -> [@$hdl]";
+		my ($cb) = @$hdl;
+		if ($cb) {
+			local $@;
+			eval{ $cb->(undef, $error); 1 } or warn;
+		}
+	}
 }
 
 sub _reconnect_after {
@@ -299,7 +322,8 @@ sub _reconnect_after {
 
 sub reconnect {
 	my $self = shift;
-	$self->disconnect;
+	return if $self->{state} == RECONNECTING;
+	$self->disconnect(@_);
 	$self->state(RECONNECTING);
 	$self->connect;
 }
@@ -318,10 +342,10 @@ sub disconnect {
 	delete $self->{timers};
 	delete $self->{fh};
 	if ( $self->{pstate} == CONNECTED ) {
-			$self->{disconnected} && $self->{disconnected}->( @_ );
+			$self->{disconnected} && $self->{disconnected}->( $self, @_ );
 	}
-	elsif ( $self->{pstate} == CONNECTING ) {
-		$self->{connfail} && $self->{connfail}->( "$!" );
+	elsif ( $self->{pstate} == CONNECTING or $self->{pstate} == RECONNECTING ) {
+		$self->{connfail} && $self->{connfail}->( $self, @_ );
 	}
 	return;
 }
@@ -331,68 +355,6 @@ sub state {
 	$self->{pstate} = $self->{state} if $self->{pstate} != $self->{state};
 	$self->{state} = shift;
 }
-
-sub request {
-	my $self = shift;
-	my $cb   = pop;
-	ref $cb eq 'CODE' or
-		croak 'Usage: request( $type, [$body, [$format, [$seq, ]]] $cb )';
-	my $type = shift;
-	my $body = @_ ? shift : '';
-	my $format;
-	if (@_) {
-		$format = shift;
-		if (!ref $format) {
-			$format = [ $format ];
-		}
-	} else {
-		$format = $self->{map}{$type} || [];
-	}
-	my $seq = @_ ? shift : ++$self->{seq};
-	
-	if ( exists $self->{req}{$seq} ) {
-		return $cb->(undef, "Duplicate request for id $seq");
-	}
-	$format->[1] ||= 'AnyEvent::IProto::Client::Res';
-	
-	$self->{state} == CONNECTED or return $cb->(undef, "Not connected");
-	
-	$self->{req}{$seq} = [ $type, $cb, @$format ];
-	
-	my $buf = pack('VVV', $type, length $body, $seq ).$body;
-	
-	if ( $self->{wbuf} ) {
-		${ $self->{wbuf} } .= $buf;
-		return;
-	}
-	my $w = syswrite( $self->{fh}, $buf );
-	if ($w == length $buf) {
-		# ok;
-	}
-	elsif (defined $w) {
-		substr($buf,0,$w,'');
-		$self->{wbuf} = \$buf;
-		$self->{ww} = AE::io $self->{fh}, 1, sub {
-			$w = syswrite( $self->{fh}, ${ $self->{wbuf} } );
-			if ($w == length ${ $self->{wbuf} }) {
-				delete $self->{wbuf};
-				delete $self->{ww};
-			}
-			elsif (defined $w) {
-				substr( ${ $self->{wbuf} }, 0, $w, '');
-			}
-			else {
-				#warn "disconnect: $!";
-				$self->_on_connreset("$!");
-			}
-		};
-	}
-	else {
-		$self->_on_connreset("$!");
-	}
-	
-}
-
 
 sub _hash_flags_to_mask($) {
 	return $_[0] || 0 unless ref $_[0];
@@ -826,6 +788,42 @@ sub lua : method { #( space, tuple [,flags], cb )
 		$self->{req}{ $self->{seq} } = [ $cb, undef, [ $outformat ], exists $opts->{args} ? ( $opts->{args} ) : () ];
 		#warn dumper $self->{req};
 		$self->write( \$pk, $cb );
+	1} or do {
+		$cb->(undef, my $e = $@);
+	};
+}
+
+sub luado : method { #( code, [,flags] cb )
+	my $self = shift;
+	my $cb   = pop;
+	eval {
+		my $code = shift;
+		my $opts = shift;
+		my $informat  = ref $opts eq 'HASH' ? $opts->{in} : '';
+		my $outformat = ref $opts eq 'HASH' ? $opts->{out} : '';
+		my $flags = _hash_flags_to_mask( $opts );
+		
+		# req_id, ns, idx, offset, limit, keys, [ format ]
+		my $pk = Protocol::Tarantool::lua(
+			++$self->{seq},
+			$flags,
+			"box.dostring",
+			[$code],
+			$informat,
+#			$format,
+		);
+		my $xcb = sub {
+			if ( $_[0] and @{ $_[0]{tuples} } ) {
+				$cb->(@{ $_[0]{tuples}[0] });
+			}
+			else {
+				$cb->(@_);
+			}
+		};
+		#warn "Created lua $proc. id=$self->{seq}: \n".xd $pk;
+		$self->{req}{ $self->{seq} } = [ $xcb, undef, [ $outformat ], exists $opts->{args} ? ( $opts->{args} ) : () ];
+		#warn dumper $self->{req};
+		$self->write( \$pk, $xcb );
 	1} or do {
 		$cb->(undef, my $e = $@);
 	};
