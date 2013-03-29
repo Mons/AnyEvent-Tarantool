@@ -39,6 +39,8 @@ sub new {
 	my $self = bless {
 		timeout => 1,
 		recovery_lag  => 1,
+		master_class => 'AnyEvent::Tarantool::Cluster::Master',
+		slave_class => 'AnyEvent::Tarantool::Cluster::Slave',
 		@_,
 		stores => [],
 	},$pkg;
@@ -52,8 +54,9 @@ sub new {
 		my $is_master = $srv->{master} ? 1 : 0;
 		my $warned;
 		my $role = $is_master ? "master" : "slave";
+		my $class = $self->{"${role}_class"};
 		
-		my $t;$t = AnyEvent::Tarantool->new(
+		my $t;$t = $class->new(
 			timeout => $self->{timeout},
 			debug   => $self->{debug},
 			%$srv,
@@ -64,24 +67,18 @@ sub new {
 				$self->log_debug( "\u$role tarantool connected $host:$port (@{ $self->{stores} })");
 				$self->watchlsn unless $is_master;
 				$self->db_online( $role => $c, $weight);
-				$self->check_servers;
 			},
 			connfail => sub {
 				shift if ref $_[0];
-				$warned++ or $self->log_error("$role tarantool connect failed: @_");
+				$warned++ or $self->log_error("\u$role tarantool connect failed: @_");
 			
 			},
 			disconnected => sub {
 				shift if ref $_[0];
-				@_ and $self->log_warn("$role tarantool connect closed: @_");
+				@_ and $self->log_warn("\u$role tarantool connect closed: @_");
 				$self->db_offline( $role => $t );
 			}
 		);
-		if ($is_master) {
-			bless $t, 'AnyEvent::Tarantool::Cluster::Master';
-		} else {
-			bless $t, 'AnyEvent::Tarantool::Cluster::Slave';
-		}
 		$srv->{t} = $t;
 		
 	}
@@ -96,14 +93,12 @@ sub db_online {
 	my $weight = shift || 1;
 	
 	$self->{$key} = $c;
+	my $first = @{ $self->{stores} } == 0;
 	$self->{stores} = [ shuffle @{ $self->{stores} }, ($c) x $weight ];
+	my $event = "${key}_connected";
+	$self->{$event} && $self->{$event}( $self,$c );
+	$first && $self->{one_connected} && $self->{one_connected}( $self,$c );
 	
-	if ($key eq 'master') {
-		$self->{master_connected} && $self->{master_connected}( $self,$c );
-	} else {
-		$self->{slave_connected} && $self->{slave_connected}( $self,$c );
-		
-	}
 	if( $self->{expected} == @{ $self->{stores} } ) {
 		$self->{all_connected} && $self->{all_connected}( $self, @{ $self->{stores} } );
 	}
@@ -115,11 +110,8 @@ sub db_offline {
 	my $c = shift;
 	my $xc = delete $self->{$key};
 	$self->{stores} = [ shuffle grep $_ != $c, @{ $self->{stores} } ];
-	if ($key eq 'master') {
-		$self->{master_disconnected} && $self->{master_disconnected}( $self,$c );
-	} else {
-		$self->{slave_disconnected} && $self->{slave_disconnected}( $self,$c );
-	}
+	my $event = "${key}_disconnected";
+	$self->{$event} && $self->{$event}( $self,$c );
 	if( @{ $self->{stores} } == 0 ) {
 		delete $self->{watch_timer};
 		$self->{all_disconnected} && $self->{all_disconnected}( $self, @{ $self->{stores} } );
@@ -177,15 +169,15 @@ sub watchlsn {
 		return unless $self->{master};
 		my $id = ++$ids;
 		my %check;
-		$self->{master}->lua("box.dostring", ["return box.info.lsn"], { out => 'L' }, sub {
+		$self->{master}->lua("box.dostring", ["return box.info().lsn"], { out => 'L' }, sub {
 			my $res = shift;
 			if ($res and $res->{count} > 0) {
 				my $mlsn = $res->{tuples}[0][0];
 				for my $srv (@{$self->{servers}}) {
 					if ($srv->{t}{state} == AnyEvent::Tarantool::CONNECTED and !$srv->{master}) {
 						$srv->{t}->luado('return { box.info.lsn, tostring(0.0+box.info.recovery_lag) }', { out => 'Lp' },sub {
-							if( defined $_[0] ){
-								my ($lsn,$lag) = @_ 
+							if( shift ){
+								my ($lsn,$lag) = @_;
 								return if $lsn >= $mlsn;
 								return if $lag < $self->{recovery_lag};
 								$self->log_error("slave $srv->{t}{server} too slow: $lsn, $lag");

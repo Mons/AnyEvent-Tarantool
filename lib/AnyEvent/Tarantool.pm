@@ -85,13 +85,55 @@ our $VERSION = '0.05'; $VERSION = eval($VERSION);
 #use Encode;
 
 
+my %SEEN;
+sub clone($);
+sub clone($) {
+	my $ref = shift;
+	exists $SEEN{0+$ref} and warn("return seen $ref: $SEEN{0+$ref}"),return $SEEN{0+$ref};
+	local $SEEN{0+$ref};
+	if ( UNIVERSAL::isa( $ref, 'HASH' ) ) {
+		$SEEN{0+$ref} = my $new = {};
+		%$new = map { ref() ? clone($_) : $_ } %$ref;
+		bless $new, ref $ref if ref $ref ne 'HASH';
+		return $new;
+	}
+	elsif ( UNIVERSAL::isa( $ref, 'ARRAY' ) ) {
+		$SEEN{0+$ref} = my $new = [];
+		@$new = map { ref() ? clone($_) : $_ } @$ref;
+		bless $new, ref $ref if ref $ref ne 'ARRAY';
+		return $new;
+	}
+	elsif ( UNIVERSAL::isa( $ref, 'SCALAR' ) ) {
+		my $copy = $$ref;
+		$SEEN{0+$ref} = my $new = \$copy;
+		bless $new, ref $ref if ref $ref ne 'SCALAR';
+		return $new;
+	}
+	elsif ( UNIVERSAL::isa( $ref, 'REF' ) ) {
+		my $copy;
+		$SEEN{0+$ref} = my $new = \$copy;
+		$copy = clone( $$ref );
+		bless $new, ref $ref if ref $ref ne 'REF';
+		return $new;
+	}
+	elsif ( UNIVERSAL::isa( $ref, 'LVALUE' ) ) {
+		my $copy = $$ref;
+		my $new = \$copy;
+		bless $new, ref $ref if ref $ref ne 'LVALUE';
+		return $new;
+	}
+	else {
+		die "Cloning of ".ref( $ref )." not supported";
+	}
+}
+
 sub init {
 	my $self = shift;
 	$self->{debug} ||= 0;
 	$self->{timeout} ||= 5;
 	$self->{reconnect} = 0.1 unless exists $self->{reconnect};
 	
-	$self->{spaces} = Protocol::Tarantool::Spaces->new( delete $self->{spaces} );
+	$self->{spaces} = Protocol::Tarantool::Spaces->new( clone( delete $self->{spaces} ) );
 	$self->{seq}  = 0;
 	$self->{req} = {};
 	
@@ -202,6 +244,8 @@ sub connect {
 
 sub _on_connect_success { 0 }
 
+*_connect_check = \&ping;
+
 sub _on_connect {
 	my ($self,$fh,$host,$port,$cb) = @_;
 	unless ($fh) {
@@ -224,7 +268,7 @@ sub _on_connect {
 			local $self->{conncheck} = 1;
 			$self->_on_connreset("$!");
 		};
-		$self->ping(sub { $tm or return;
+		$self->_connect_check(sub { $tm or return;
 			my $res = shift;undef $tm;
 			if ($res and $res->{code} == 0) {
 				$self->state( CONNECTED );
@@ -814,10 +858,10 @@ sub luado : method { #( code, [,flags] cb )
 		);
 		my $xcb = sub {
 			if ( $_[0] and @{ $_[0]{tuples} } ) {
-				$cb->(@{ $_[0]{tuples}[0] });
+				$cb->(1, @{ $_[0]{tuples}[0] });
 			}
 			else {
-				$cb->(@_);
+				$cb->(undef, @_);
 			}
 		};
 		#warn "Created lua $proc. id=$self->{seq}: \n".xd $pk;
