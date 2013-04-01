@@ -129,6 +129,7 @@ sub clone($) {
 
 sub init {
 	my $self = shift;
+	$self->{slab_cache_time} = 1 unless exists $self->{slab_cache_time};
 	$self->{debug} ||= 0;
 	$self->{timeout} ||= 5;
 	$self->{reconnect} = 0.1 unless exists $self->{reconnect};
@@ -871,6 +872,156 @@ sub luado : method { #( code, [,flags] cb )
 	1} or do {
 		$cb->(undef, my $e = $@);
 	};
+}
+
+sub slab_info {
+	my $self = shift;
+	my $cb   = pop;
+	if ($self->{slab_info} and $self->{slab_info}{until} > time) {
+		return $cb->( $self->{slab_info}{slab} );
+	}
+	elsif ($self->{slab_info} and $self->{slab_info}{queue}) {
+		push @{$self->{slab_info}{queue}}, $cb;
+		return;
+	}
+	else {
+		$self->{slab_info} = {};
+		$self->{slab_info}{queue} = [ $cb ];
+		$self->luado(q{
+			if aetnt == nil then
+				aetnt = {}
+				aetnt.stats = function()
+					local st;
+					if (aetnt.lstat == nil) then
+						st = {
+							call    = 0;
+							select  = 0;
+							update  = 0;
+							delete  = 0;
+							replace = 0;
+						}
+					else
+						st = {
+							call    = box.stat.CALL.total - aetnt.lstat.call;
+							select  = box.stat.SELECT.total - aetnt.lstat.select;
+							update  = box.stat.UPDATE.total - aetnt.lstat.update;
+							delete  = box.stat.DELETE.total - aetnt.lstat.delete;
+							replace = box.stat.REPLACE.total - aetnt.lstat.replace;
+						}
+					end
+					aetnt.lstat = {
+						call    = box.stat.CALL.total;
+						select  = box.stat.SELECT.total;
+						update  = box.stat.UPDATE.total;
+						delete  = box.stat.DELETE.total;
+						replace = box.stat.REPLACE.total;
+					}
+					return st
+				end
+			end
+			local r = {
+				'arena.used', box.slab().arena_used,
+				'arena.size', box.slab().arena_size,
+				'info.lsn',   box.info().lsn,
+				'info.lag',   tostring(box.info().recovery_lag)
+			};
+			local stats = aetnt.stats()
+			for k,v in pairs(stats) do
+				r[#r+1] = 'stat.' .. k
+				r[#r+1] = tonumber( v )
+			end
+			if box.info().recovery_last_update > 0 then
+				r[#r + 1] = 'info.lut'
+				r[#r + 1] = tostring(box.time() - box.info().recovery_last_update)
+			end
+			local s = box.slab().slabs;
+			local items_used = 0;
+			for k,i in pairs(s) do
+				for x,v in pairs(i) do
+					r[#r + 1] = 'slab.' .. k .. '.' .. x
+					r[#r + 1] = tonumber( v )
+					if x == 'bytes_used' then
+						items_used = items_used + tonumber(v)
+					end
+				end
+			end
+			r[#r + 1] = 'arena.items'
+			r[#r + 1] = items_used
+			for k,v in pairs(box.space) do
+				if v.enabled then
+					r[#r+1] = 'space[' .. k ..  '].items'
+					r[#r+1] = v:len()
+				end
+			end
+			return r
+		}, sub {
+			if ( shift ) {
+				my %s = @_;
+				$_ = unpack +( length == 8 ? 'Q' : length == 4 ? 'V' : 'a*' ), $_ for ( values %s ) ;
+				my %slab;
+				my $items = 0;
+				my $isize = 0;
+				my $maxitems = 0;
+				my $maxsize = 0;
+				my %arena;
+				my %space;
+				my %info;
+				my %stat;
+				for (keys %s) {
+					if( my ($sz,$k) = m{^slab\.(\d+)\.(.+)$} ) {
+						$slab{$sz}{$k} = $s{$_};
+						if ( $k eq 'items' ) {
+							$items += $s{$_};
+							$maxitems = $s{$_} if $maxitems < $s{$_};
+						};
+						if ( $k eq 'bytes_used' ) {
+							$isize += $s{$_};
+							$maxsize = $s{$_} if $maxsize < $s{$_};
+						}
+					}
+					elsif( my ($k) = m{^arena\.(.+)$} ) {
+						$arena{$k} = $s{$_};
+					}
+					elsif( my ($k) = m{^info\.(.+)$} ) {
+						$info{$k} = $s{$_};
+					}
+					elsif( my ($k) = m{^stat\.(.+)$} ) {
+						$stat{$k} = $s{$_};
+					}
+					elsif( my ($k) = m{^space\[(\d+)\]\.items$} ) {
+						$space{$k} = $s{$_};
+					}
+					else {
+						warn "unknown key: $_";
+					}
+				}
+				my $maxbtotal;
+				for (keys %slab) {
+					$slab{$_}{bytes_total} = $slab{$_}{bytes_used} + $slab{$_}{bytes_free};
+					$maxbtotal = $slab{$_}{bytes_total} if $maxbtotal < $slab{$_}{bytes_total};
+				}
+				$arena{free} = $arena{size} - $arena{used};
+				$self->{slab_info}{until} = $self->{slab_cache_time} ? time + $self->{slab_cache_time} : 0;
+				$self->{slab_info}{slab} = {
+					items     => $items,
+					maxitems  => $maxitems,
+					size      => $isize,
+					maxsize   => $maxsize,
+					maxbtotal => $maxbtotal,
+					slab      => \%slab,
+					arena     => \%arena,
+					space     => \%space,
+					info      => \%info,
+					stat      => \%stat,
+				};
+			} else {
+				warn "[TNT][ERR] @_";
+				$self->{slab_info}{until} = $self->{slab_cache_time} ? time + 1 : 0;
+				$self->{slab_info}{slab} = undef;
+			}
+			$_->( $self->{slab_info}{slab} ) for @{ delete $self->{slab_info}{queue} };
+		});
+	}
 }
 
 

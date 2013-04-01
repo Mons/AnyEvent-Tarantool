@@ -66,24 +66,31 @@ sub new {
 				$warned = 0;
 				$self->log_debug( "\u$role tarantool connected $host:$port (@{ $self->{stores} })");
 				$self->watchlsn unless $is_master;
+				$srv->{connected} = 1;
 				$self->db_online( $role => $c, $weight);
 			},
 			connfail => sub {
 				shift if ref $_[0];
 				$warned++ or $self->log_error("\u$role tarantool connect failed: @_");
+				$srv->{connected} = 0;
 			
 			},
 			disconnected => sub {
 				shift if ref $_[0];
 				@_ and $self->log_warn("\u$role tarantool connect closed: @_");
+				$srv->{connected} = 0;
 				$self->db_offline( $role => $t );
 			}
 		);
 		$srv->{t} = $t;
-		
 	}
 	
 	$self;
+}
+
+sub nodes {
+	my $self = shift;
+	return @{ $self->{servers} };
 }
 
 sub db_online {
