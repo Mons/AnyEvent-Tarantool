@@ -806,6 +806,7 @@ sub insert : method { #( space, tuple [,flags], cb )
     
 =back
 
+=back
 =cut
 
 

@@ -20,12 +20,14 @@
 \#$
 \b\.#
 \.bak$
+_bak$
 
 # Avoid Devel::Cover files.
 \bcover_db\b
 
 # Avoid local testing/dist files
-
+^MYMETA\.
+^lib/.+\.pl$
 ^dist/
 ^makeall\.sh$
 ^tmp/
