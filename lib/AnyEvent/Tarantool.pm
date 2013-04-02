@@ -968,7 +968,8 @@ sub slab_info {
 				my %info;
 				my %stat;
 				for (keys %s) {
-					if( my ($sz,$k) = m{^slab\.(\d+)\.(.+)$} ) {
+					my ($k,$sz);
+					if( ($sz,$k) = m{^slab\.(\d+)\.(.+)$} ) {
 						$slab{$sz}{$k} = $s{$_};
 						if ( $k eq 'items' ) {
 							$items += $s{$_};
@@ -979,16 +980,16 @@ sub slab_info {
 							$maxsize = $s{$_} if $maxsize < $s{$_};
 						}
 					}
-					elsif( my ($k) = m{^arena\.(.+)$} ) {
+					elsif( ($k) = m{^arena\.(.+)$} ) {
 						$arena{$k} = $s{$_};
 					}
-					elsif( my ($k) = m{^info\.(.+)$} ) {
+					elsif( ($k) = m{^info\.(.+)$} ) {
 						$info{$k} = $s{$_};
 					}
-					elsif( my ($k) = m{^stat\.(.+)$} ) {
+					elsif( ($k) = m{^stat\.(.+)$} ) {
 						$stat{$k} = $s{$_};
 					}
-					elsif( my ($k) = m{^space\[(\d+)\]\.items$} ) {
+					elsif( ($k) = m{^space\[(\d+)\]\.items$} ) {
 						$space{$k} = $s{$_};
 					}
 					else {
