@@ -122,6 +122,9 @@ sub clone($) {
 		bless $new, ref $ref if ref $ref ne 'LVALUE';
 		return $new;
 	}
+	elsif (!ref $ref ) {
+		return $ref;
+	}
 	else {
 		die "Cloning of ".ref( $ref )." not supported";
 	}
@@ -859,8 +862,8 @@ sub luado : method { #( code, [,flags] cb )
 #			$format,
 		);
 		my $xcb = sub {
-			if ( $_[0] and @{ $_[0]{tuples} } ) {
-				$cb->(1, @{ $_[0]{tuples}[0] });
+			if ( $_[0] ) {
+				$cb->(1, $_[0]{count} ? ( @{ $_[0]{tuples}[0] } ) : ());
 			}
 			else {
 				$cb->(undef, @_);
@@ -888,49 +891,20 @@ sub slab_info {
 	else {
 		$self->{slab_info} = {};
 		$self->{slab_info}{queue} = [ $cb ];
-		$self->luado(q{
-			if aetnt == nil then
-				aetnt = {}
-				aetnt.stats = function()
-					local st;
-					if (aetnt.lstat == nil) then
-						st = {
-							call    = 0;
-							select  = 0;
-							update  = 0;
-							delete  = 0;
-							replace = 0;
-						}
-					else
-						st = {
-							call    = box.stat.CALL.total - aetnt.lstat.call;
-							select  = box.stat.SELECT.total - aetnt.lstat.select;
-							update  = box.stat.UPDATE.total - aetnt.lstat.update;
-							delete  = box.stat.DELETE.total - aetnt.lstat.delete;
-							replace = box.stat.REPLACE.total - aetnt.lstat.replace;
-						}
-					end
-					aetnt.lstat = {
-						call    = box.stat.CALL.total;
-						select  = box.stat.SELECT.total;
-						update  = box.stat.UPDATE.total;
-						delete  = box.stat.DELETE.total;
-						replace = box.stat.REPLACE.total;
-					}
-					return st
-				end
-			end
+		$self->luado(qq{
 			local r = {
 				'arena.used', box.slab().arena_used,
 				'arena.size', box.slab().arena_size,
-				'info.lsn',   box.info().lsn,
-				'info.lag',   tostring(box.info().recovery_lag)
-			};
-			local stats = aetnt.stats()
-			for k,v in pairs(stats) do
-				r[#r+1] = 'stat.' .. k
-				r[#r+1] = tonumber( v )
-			end
+				'info.lsn',   box.info.lsn,
+				'info.lag',   tostring(box.info.recovery_lag),
+				'info.uptime',box.info.uptime,
+				'info.pid',   box.info.pid,
+				'op.call',    box.stat.CALL.rps,
+				'op.select',  box.stat.SELECT.rps,
+				'op.update',  box.stat.UPDATE.rps,
+				'op.delete',  box.stat.DELETE.rps,
+				'op.replace', box.stat.REPLACE.rps,
+			}
 			if box.info().recovery_last_update > 0 then
 				r[#r + 1] = 'info.lut'
 				r[#r + 1] = tostring(box.time() - box.info().recovery_last_update)
@@ -969,7 +943,7 @@ sub slab_info {
 				my %info;
 				my %stat;
 				for (keys %s) {
-					my ($k,$sz);
+					my ($k,$sz,$v);
 					if( ($sz,$k) = m{^slab\.(\d+)\.(.+)$} ) {
 						$slab{$sz}{$k} = $s{$_};
 						if ( $k eq 'items' ) {
@@ -987,7 +961,7 @@ sub slab_info {
 					elsif( ($k) = m{^info\.(.+)$} ) {
 						$info{$k} = $s{$_};
 					}
-					elsif( ($k) = m{^stat\.(.+)$} ) {
+					elsif( ($k) = m{^op\.(.+)$} ) {
 						$stat{$k} = $s{$_};
 					}
 					elsif( ($k) = m{^space\[(\d+)\]\.items$} ) {
@@ -1014,7 +988,8 @@ sub slab_info {
 					arena     => \%arena,
 					space     => \%space,
 					info      => \%info,
-					stat      => \%stat,
+					op        => \%stat,
+					stat      => {}, # temporary for backward
 				};
 			} else {
 				warn "[TNT][ERR] @_";
