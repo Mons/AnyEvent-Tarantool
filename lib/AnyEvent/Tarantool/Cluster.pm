@@ -64,14 +64,15 @@ sub new {
 			connected => sub {
 				my ($c,$host,$port) = @_;
 				$warned = 0;
-				$self->log_debug( "\u$role tarantool connected $host:$port (@{ $self->{stores} })");
+				$self->log_debug( "\u$role tarantool connected $host:$port (@{ $self->{stores} } + $c)");
 				$self->watchlsn unless $is_master;
 				$srv->{connected} = 1;
 				$self->db_online( $role => $c, $weight);
 			},
 			connfail => sub {
 				shift if ref $_[0];
-				$warned++ or $self->log_error("\u$role tarantool connect failed: @_");
+				$warned++ or
+					$self->log_error("\u$role tarantool connect failed: @_");
 				$srv->{connected} = 0;
 			
 			},
@@ -182,7 +183,24 @@ sub watchlsn {
 				my $mlsn = $res->{tuples}[0][0];
 				for my $srv (@{$self->{servers}}) {
 					if ($srv->{t}{state} == AnyEvent::Tarantool::CONNECTED and !$srv->{master}) {
+						$srv->{t}->lua('box.dostring', ['return { box.info.lsn, tostring(0.0+box.info.recovery_lag) }'], { out => 'Lp' },sub {
+							my $res = shift;
+							if( $res and $res->{status} eq 'ok' and $res->{count} > 0 ){
+								my ($lsn,$lag) = @{ $res->{tuples}[0] };
+								return if $lsn >= $mlsn;
+								return if $lag < $self->{recovery_lag};
+								$self->log_error("slave $srv->{t}{server} too slow: $lsn, $lag");
+								$srv->{t}->reconnect;
+							} else {
+								shift;
+								$self->log_error( "slave error: @_" );
+								$srv->{t}->reconnect(@_);
+							}
+						});
+
+=for rem
 						$srv->{t}->luado('return { box.info.lsn, tostring(0.0+box.info.recovery_lag) }', { out => 'Lp' },sub {
+							warn "warchlsn: @_";
 							if( shift ){
 								my ($lsn,$lag) = @_;
 								return if $lsn >= $mlsn;
@@ -195,6 +213,7 @@ sub watchlsn {
 								$srv->{t}->reconnect(@_);
 							}
 						});
+=cut
 					}
 				}
 			}

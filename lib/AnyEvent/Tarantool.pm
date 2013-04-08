@@ -236,6 +236,15 @@ sub connect {
 			#warn "Connect: @_...\n";# if $self->{debug};
 			
 			my ($fh,$host,$port) = @_;
+			if ($fh) {
+				my ($srv,$hst) = AnyEvent::Socket::unpack_sockaddr(getsockname $fh);
+				$hst = format_address $hst;
+				if ( $hst eq $host and $srv == $port ) {
+					warn "on_connect: $hst:$srv -> $host:$port";
+					undef $fh;
+					$! = Errno::ECONNREFUSED;
+				}
+			}
 			
 			$self->_on_connect($fh,$host,$port,$cb);
 		},
