@@ -55,7 +55,6 @@ sub new {
 		my $warned;
 		my $role = $is_master ? "master" : "slave";
 		my $class = $self->{"${role}_class"};
-		
 		my $t;$t = $class->new(
 			timeout => $self->{timeout},
 			debug   => $self->{debug},
@@ -72,13 +71,13 @@ sub new {
 			connfail => sub {
 				shift if ref $_[0];
 				$warned++ or
-					$self->log_error("\u$role tarantool connect failed: @_");
+					$self->log_error("\u$role tarantool $t->{server} connect failed: @_");
 				$srv->{connected} = 0;
 			
 			},
 			disconnected => sub {
 				shift if ref $_[0];
-				@_ and $self->log_warn("\u$role tarantool connect closed: @_");
+				@_ and $self->log_warn("\u$role tarantool $t->{server} connect closed: @_");
 				$srv->{connected} = 0;
 				$self->db_offline( $role => $t );
 			}
