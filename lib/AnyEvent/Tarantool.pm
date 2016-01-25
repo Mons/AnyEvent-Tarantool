@@ -909,6 +909,8 @@ sub slab_info {
 		$self->{slab_info}{queue} = [ $cb ];
 		$self->luado(qq{
 			local r = {
+				'arena.pcn.used', tostring(tonumber(box.slab().arena_used) / tonumber(box.slab().arena_size)),
+				'arena.size', box.slab().arena_size,
 				'arena.used', box.slab().arena_used,
 				'arena.size', box.slab().arena_size,
 				'info.lsn',   box.info.lsn,
@@ -938,6 +940,8 @@ sub slab_info {
 			end
 			r[#r + 1] = 'arena.items'
 			r[#r + 1] = items_used
+			r[#r + 1] = 'arena.pcn.items'
+			r[#r + 1] = tostring(tonumber(items_used)/tonumber(box.slab().arena_size))
 			for k,v in pairs(box.space) do
 				if v.enabled then
 					r[#r+1] = 'space[' .. k ..  '].items'
